@@ -1,0 +1,46 @@
+{
+  "name": "prag-music",
+  "version": "1.0.0",
+  "main": "expo-router/entry",
+  "dependencies": {
+    "@expo/metro-runtime": "~58.0.17",
+    "@expo/vector-icons": "^15.0.2",
+    "@react-native-community/slider": "5.2.1",
+    "expo": "~58.0.23",
+    "expo-asset": "~58.0.20",
+    "expo-audio": "~58.0.11",
+    "expo-constants": "~58.0.15",
+    "expo-crypto": "~58.0.7",
+    "expo-file-system": "~58.0.13",
+    "expo-font": "~58.0.11",
+    "expo-haptics": "~58.0.7",
+    "expo-image": "~58.0.18",
+    "expo-linear-gradient": "~58.0.3",
+    "expo-linking": "~58.0.16",
+    "expo-router": "~58.0.30",
+    "expo-status-bar": "~58.0.4",
+    "expo-system-ui": "~58.0.7",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-native": "0.88.1",
+    "react-native-safe-area-context": "~5.11.1",
+    "react-native-screens": "~4.30.1",
+    "react-native-web": "^0.21.4"
+  },
+  "devDependencies": {
+    "@types/react": "~19.3.0",
+    "typescript": "~6.0.3"
+  },
+  "scripts": {
+    "start": "node tools/write-env.mjs && expo start",
+    "start:tunnel": "node tools/write-env.mjs && expo start --tunnel",
+    "ios": "node tools/write-env.mjs --device && expo run:ios --device",
+    "ios:release": "node tools/write-env.mjs --device && expo run:ios --device --configuration Release",
+    "web": "node tools/write-env.mjs && expo start --web",
+    "seed": "node tools/build-seed.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "expo lint",
+    "doctor": "npx expo-doctor"
+  },
+  "private": true
+}

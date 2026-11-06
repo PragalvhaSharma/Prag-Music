@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "prag-music",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "workers_dev": true,
+  "observability": { "enabled": true },
+  "r2_buckets": [
+    { "binding": "BUCKET", "bucket_name": "prag-music" }
+  ]
+  // APP_TOKEN and ADMIN_TOKEN are secrets: `wrangler secret put` (see scripts/setup.sh),
+  // and .dev.vars for local development.
+}
