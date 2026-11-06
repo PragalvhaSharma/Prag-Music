@@ -154,6 +154,7 @@ function onTrackChanged() {
   }
   const id = s.queue[logical];
   if (logical !== s.index || listen.trackId !== id) {
+    pendingSeek = null; // a restored position belongs to the old song only
     beginListen(id);
     playerStore.set({ index: logical, position: 0, duration: track(id)?.durationSec ?? 0 });
     updateLockScreen(id);
@@ -328,6 +329,7 @@ export function next() {
   if (!playlist) return;
   const { index } = playerStore.get();
   if (index < 0) return;
+  pendingSeek = null;
   if (playlist.currentIndex < playlist.trackCount - 1) playlist.next();
   else {
     const n = nextLogical(index);
@@ -362,6 +364,7 @@ export function jumpTo(logicalIndex: number) {
   if (logicalIndex < 0 || logicalIndex >= queue.length) return;
   const w = windowLogical.indexOf(logicalIndex);
   if (playlist && w >= 0 && w > playlist.currentIndex) {
+    pendingSeek = null;
     playlist.skipTo(w);
     playlist.play();
   } else loadWindow(logicalIndex, true);
@@ -387,9 +390,18 @@ export function toggleShuffle() {
 
 export function cycleRepeat() {
   const order: RepeatMode[] = ['off', 'all', 'one'];
-  const repeat = order[(order.indexOf(playerStore.get().repeat) + 1) % order.length];
+  const s = playerStore.get();
+  const repeat = order[(order.indexOf(s.repeat) + 1) % order.length];
   playerStore.set({ repeat });
   if (playlist) playlist.loop = repeat === 'one' ? 'single' : 'none';
+  // Leaving "repeat all": drop songs that were queued natively by wrapping back to the start.
+  if (s.repeat === 'all' && playlist && s.index >= 0) {
+    const ahead = windowLogical.slice(playlist.currentIndex + 1);
+    if (ahead.some((l) => l !== STALE && l <= s.index)) {
+      rebaseKeepingCurrent(s.queue, s.index);
+      return;
+    }
+  }
   refill();
   save();
 }
