@@ -9,9 +9,12 @@ import { useTracksById } from '../lib/library';
 import {
   cycleRepeat,
   jumpTo,
+  MAX_SPEED,
+  MIN_SPEED,
   next,
   previous,
   seek,
+  setSpeed,
   toggleShuffle,
   togglePlay,
   useCurrentId,
@@ -23,6 +26,10 @@ import { colors } from '../ui/theme';
 function close() {
   if (router.canGoBack()) router.back();
   else router.replace('/');
+}
+
+function formatSpeed(rate: number) {
+  return `${Number(rate.toFixed(2))}x`;
 }
 
 export default function PlayerScreen() {
@@ -37,6 +44,7 @@ export default function PlayerScreen() {
   const duration = usePlayer((s) => s.duration);
   const shuffle = usePlayer((s) => s.shuffle);
   const repeat = usePlayer((s) => s.repeat);
+  const rate = usePlayer((s) => s.rate);
   const queue = usePlayer((s) => s.queue);
   const index = usePlayer((s) => s.index);
   const label = usePlayer((s) => s.sourceLabel);
@@ -118,6 +126,24 @@ export default function PlayerScreen() {
         </Pressable>
       </View>
 
+      <View style={styles.speedRow}>
+        <Ionicons name="speedometer-outline" size={18} color={rate !== 1 ? colors.accent : colors.textDim} />
+        <Slider
+          style={{ flex: 1 }}
+          minimumValue={MIN_SPEED}
+          maximumValue={MAX_SPEED}
+          step={0.05}
+          value={rate}
+          onValueChange={setSpeed}
+          minimumTrackTintColor={colors.accent}
+          maximumTrackTintColor={colors.border}
+          thumbTintColor={colors.text}
+        />
+        <Pressable hitSlop={10} onPress={() => setSpeed(1)} style={[styles.speed, rate !== 1 && styles.speedOn]}>
+          <Text style={[styles.speedText, rate !== 1 && styles.speedTextOn]}>{formatSpeed(rate)}</Text>
+        </Pressable>
+      </View>
+
       {upNext.length ? (
         <View style={styles.queue}>
           <Text style={styles.queueTitle}>Up next</Text>
@@ -157,6 +183,11 @@ const styles = StyleSheet.create({
   controls: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 30, marginTop: 18 },
   play: { width: 76, height: 76, borderRadius: 38, backgroundColor: colors.accent, alignItems: 'center', justifyContent: 'center' },
   one: { position: 'absolute', right: -6, top: -6, color: colors.accent, fontSize: 10, fontWeight: '900' },
+  speedRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 24, marginTop: 22 },
+  speed: { minWidth: 52, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12, backgroundColor: colors.surfaceHigh, alignItems: 'center' },
+  speedOn: { backgroundColor: colors.accent },
+  speedText: { color: colors.textDim, fontSize: 13, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  speedTextOn: { color: colors.accentInk },
   queue: { marginTop: 34, paddingHorizontal: 20 },
   queueTitle: { color: colors.text, fontSize: 18, fontWeight: '800', marginBottom: 8 },
   qRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 7 },

@@ -34,6 +34,7 @@ export type PlayerState = {
   duration: number;
   shuffle: boolean;
   repeat: RepeatMode;
+  rate: number; // playback speed, 1 = normal
   error: string | null;
 };
 
@@ -48,10 +49,19 @@ export const playerStore = createStore<PlayerState>({
   duration: 0,
   shuffle: false,
   repeat: 'off',
+  rate: 1,
   error: null,
 });
 
-type Saved = Pick<PlayerState, 'queue' | 'baseQueue' | 'index' | 'sourceLabel' | 'shuffle' | 'repeat' | 'position'>;
+type Saved = Pick<PlayerState, 'queue' | 'baseQueue' | 'index' | 'sourceLabel' | 'shuffle' | 'repeat' | 'position'> & {
+  rate?: number;
+};
+export const MIN_SPEED = 0.5;
+export const MAX_SPEED = 2; // iOS caps playlist speed at 2x
+function clampSpeed(rate: unknown): number {
+  if (typeof rate !== 'number' || !Number.isFinite(rate)) return 1;
+  return Math.round(Math.min(MAX_SPEED, Math.max(MIN_SPEED, rate)) * 20) / 20; // 0.05 steps
+}
 const SAVE_FILE = 'player.json';
 
 let playlist: AudioPlaylist | null = null;
@@ -104,6 +114,7 @@ function save() {
       shuffle: s.shuffle,
       repeat: s.repeat,
       position: s.position,
+      rate: s.rate,
     };
   });
 }
@@ -273,6 +284,9 @@ export async function initPlayer(): Promise<void> {
   playlist.addListener('playlistStatusUpdate', onStatus);
 
   const saved = readJson<Saved>(SAVE_FILE);
+  const rate = clampSpeed(saved?.rate ?? 1);
+  playerStore.set({ rate });
+  playlist.playbackRate = rate;
   if (saved && saved.queue?.length && saved.index >= 0) {
     const queue = saved.queue.filter(canPlay);
     const index = Math.min(queue.indexOf(saved.queue[saved.index]), queue.length - 1);
@@ -403,6 +417,15 @@ export function cycleRepeat() {
     }
   }
   refill();
+  save();
+}
+
+/** Sets playback speed (0.5x to 2x). Pitch stays the same. */
+export function setSpeed(value: number) {
+  const rate = clampSpeed(value);
+  if (rate === playerStore.get().rate) return;
+  playerStore.set({ rate });
+  if (playlist) playlist.playbackRate = rate;
   save();
 }
 
