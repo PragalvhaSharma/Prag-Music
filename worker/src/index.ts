@@ -1,11 +1,25 @@
 /**
- * Prag Music Worker: serves library.json, audio and art from the private R2
- * bucket, plus a small admin API used by the ingest scripts.
+ * Prag Music Worker: serves library.json, audio and art from private storage
+ * (Backblaze B2 in production, an R2 binding in tests), plus a small admin API
+ * used by the ingest scripts.
  * The binding contract is docs/contract.md at the repo root.
  */
 
-export interface Env {
-  BUCKET: R2Bucket;
+import {
+  ChecksumMismatch,
+  etagMatches,
+  parseEtags,
+  resolveByteRange,
+  storageFor,
+  type ByteRange,
+  type GetOptions,
+  type GetResult,
+  type Storage,
+  type StorageEnv,
+  type StoredObject,
+} from "./storage";
+
+export interface Env extends StorageEnv {
   APP_TOKEN: string;
   ADMIN_TOKEN: string;
 }
@@ -14,7 +28,6 @@ const TRACK_ID = /^[A-Za-z0-9]{22}$/;
 const ADMIN_KEY = /^(?:library\.json|audio\/[A-Za-z0-9]{22}\.m4a|art\/[A-Za-z0-9]{22}\.jpg)$/;
 const SHA256_HEX = /^[0-9a-fA-F]{64}$/;
 const MEDIA_CACHE = "private, max-age=31536000, immutable";
-const LIST_PAGE = 1000;
 
 const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
@@ -24,7 +37,7 @@ const CORS_HEADERS: Record<string, string> = {
 const PREFLIGHT_HEADERS: Record<string, string> = {
   ...CORS_HEADERS,
   "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
-  "Access-Control-Allow-Headers": "Authorization, Range, If-None-Match, If-Range",
+  "Access-Control-Allow-Headers": "Authorization, Range, If-None-Match, If-Modified-Since, If-Range",
   "Access-Control-Max-Age": "86400",
 };
 
@@ -77,18 +90,41 @@ function isAdminAuthorized(request: Request, env: Env): Promise<boolean> {
 
 // ---------- conditional requests and ranges ----------
 
-/** Parses an If-None-Match / If-Range list into bare entity tags ("*" kept as is). */
-function parseEtags(header: string): string[] {
-  return header
-    .split(",")
-    .map((tag) => tag.trim().replace(/^W\//, "").replace(/^"(.*)"$/, "$1"))
-    .filter(Boolean);
+/** The bare tag of an If-Range entity tag, or null when If-Range carries a date. */
+function ifRangeEtag(header: string): string | null {
+  const match = /^(?:W\/)?"([^"]*)"$/.exec(header.trim());
+  return match ? match[1]! : null;
 }
 
-function etagMatches(header: string | null, etag: string): boolean {
-  if (header === null) return false;
+/** Normalises If-None-Match to quoted tags (or "*"), so the store sees one simple form. */
+function ifNoneMatchValue(header: string | null): string | undefined {
+  if (header === null) return undefined;
   const tags = parseEtags(header);
-  return tags.includes("*") || tags.includes(etag);
+  if (tags.includes("*")) return "*";
+  return tags.length ? tags.map((tag) => '"' + tag + '"').join(", ") : undefined;
+}
+
+/** If-None-Match and If-Modified-Since from the client, ready for storage.get. */
+function conditions(request: Request): GetOptions {
+  const ifNoneMatch = request.headers.get("If-None-Match");
+  if (ifNoneMatch !== null) return { ifNoneMatch: ifNoneMatchValue(ifNoneMatch) };
+  // RFC 9110: If-Modified-Since only counts when If-None-Match is absent.
+  const since = request.headers.get("If-Modified-Since");
+  return since !== null && !Number.isNaN(Date.parse(since)) ? { ifModifiedSince: since } : {};
+}
+
+/** Parses a single bytes=a-b, bytes=a- or bytes=-n. Malformed or multi-range headers give null. */
+export function parseRange(header: string | null): ByteRange | null {
+  if (header === null) return null;
+  const match = /^bytes=(\d*)-(\d*)$/i.exec(header.trim());
+  if (!match) return null;
+  const [, first = "", last = ""] = match;
+  if (first === "" && last === "") return null;
+  if (first === "") return { suffix: Number(last) };
+  const offset = Number(first);
+  if (last === "") return { offset };
+  if (Number(last) < offset) return null; // invalid spec, ignore
+  return { offset, length: Number(last) - offset + 1 };
 }
 
 export type RangeResult =
@@ -97,106 +133,131 @@ export type RangeResult =
   | { kind: "range"; offset: number; length: number };
 
 /**
- * Resolves a Range header against an object size. Supports a single
- * bytes=a-b, bytes=a- or bytes=-n. Malformed or multi-range headers are
- * ignored (full 200 response), as RFC 9110 allows.
+ * Resolves a Range header against an object size. Malformed or multi-range
+ * headers are ignored (full 200 response), as RFC 9110 allows.
  */
 export function resolveRange(header: string | null, size: number): RangeResult {
-  if (header === null) return { kind: "none" };
-  const match = /^bytes=(\d*)-(\d*)$/i.exec(header.trim());
-  if (!match) return { kind: "none" };
-  const [, first = "", last = ""] = match;
-  if (first === "" && last === "") return { kind: "none" };
+  const range = parseRange(header);
+  if (!range) return { kind: "none" };
+  const resolved = resolveByteRange(range, size);
+  return resolved ? { kind: "range", ...resolved } : { kind: "unsatisfiable" };
+}
 
-  if (first === "") {
-    const suffix = Number(last);
-    if (suffix === 0 || size === 0) return { kind: "unsatisfiable" };
-    const length = Math.min(suffix, size);
-    return { kind: "range", offset: size - length, length };
-  }
+const contentRange = (offset: number, length: number, size: number) =>
+  "bytes " + offset + "-" + (offset + length - 1) + "/" + size;
 
-  const start = Number(first);
-  if (last !== "" && Number(last) < start) return { kind: "none" }; // invalid spec, ignore
-  if (start >= size) return { kind: "unsatisfiable" };
-  const end = last === "" ? size - 1 : Math.min(Number(last), size - 1);
-  return { kind: "range", offset: start, length: end - start + 1 };
+function unexpected(result: GetResult): never {
+  throw new Error("unexpected storage status " + result.status);
 }
 
 // ---------- read routes ----------
+//
+// Every read costs one storage call: GET forwards Range and the conditions to
+// the store and builds the reply from its answer, HEAD is one HEAD. The only
+// second call is a stale If-Range (412), which then fetches the whole file.
 
 async function serveLibrary(request: Request, env: Env): Promise<Response> {
-  const head = request.method === "HEAD";
-  const conditional = request.headers.get("If-None-Match");
+  const storage = storageFor(env);
 
-  if (conditional !== null || head) {
-    const meta = await env.BUCKET.head("library.json");
+  if (request.method === "HEAD") {
+    const meta = await storage.head("library.json");
     if (!meta) return notFound();
-    const headers = libraryHeaders(meta);
-    if (etagMatches(conditional, meta.etag)) return new Response(null, { status: 304, headers });
-    if (head) {
-      headers.set("Content-Length", String(meta.size));
-      return new Response(null, { status: 200, headers });
-    }
+    const headers = libraryHeaders(meta.httpEtag);
+    if (etagMatches(request.headers.get("If-None-Match"), meta.etag)) return new Response(null, { status: 304, headers });
+    headers.set("Content-Length", String(meta.size));
+    return new Response(null, { status: 200, headers });
   }
 
-  const object = await env.BUCKET.get("library.json");
-  if (!object) return notFound();
-  const headers = libraryHeaders(object);
-  headers.set("Content-Length", String(object.size));
-  return new Response(object.body, { status: 200, headers });
+  const result = await storage.get("library.json", conditions(request));
+  if (!result) return notFound();
+  if (result.status === 304) return new Response(null, { status: 304, headers: libraryHeaders(result.httpEtag) });
+  if (result.status !== 200) return unexpected(result);
+  const headers = libraryHeaders(result.meta.httpEtag);
+  headers.set("Content-Length", String(result.meta.size));
+  return new Response(result.body, { status: 200, headers });
 }
 
-function libraryHeaders(meta: R2Object): Headers {
+function libraryHeaders(httpEtag: string): Headers {
   return new Headers({
     "Content-Type": "application/json",
     "Cache-Control": "no-cache",
-    ETag: meta.httpEtag,
+    ETag: httpEtag,
   });
 }
 
+function mediaHeaders(contentType: string): Headers {
+  return new Headers({ "Content-Type": contentType, "Accept-Ranges": "bytes", "Cache-Control": MEDIA_CACHE });
+}
+
+function rangeNotSatisfiable(headers: Headers, size: number): Response {
+  headers.set("Content-Range", "bytes */" + size);
+  headers.set("Content-Type", "application/json");
+  headers.set("Cache-Control", "no-store");
+  return new Response(JSON.stringify({ error: "range_not_satisfiable" }), { status: 416, headers });
+}
+
 async function serveMedia(request: Request, env: Env, key: string, contentType: string): Promise<Response> {
-  const meta = await env.BUCKET.head(key);
-  if (!meta) return notFound();
+  const storage = storageFor(env);
+  if (request.method === "HEAD") return headMedia(request, storage, key, contentType);
 
-  const headers = new Headers({
-    "Content-Type": contentType,
-    "Accept-Ranges": "bytes",
-    "Cache-Control": MEDIA_CACHE,
-    ETag: meta.httpEtag,
-  });
-
-  if (etagMatches(request.headers.get("If-None-Match"), meta.etag)) {
-    return new Response(null, { status: 304, headers });
-  }
-
-  // If-Range: only honour Range when the client's validator still matches.
+  const options = conditions(request);
+  options.range = parseRange(request.headers.get("Range")) ?? undefined;
   const ifRange = request.headers.get("If-Range");
-  const rangeHeader = ifRange === null || etagMatches(ifRange, meta.etag) ? request.headers.get("Range") : null;
-  const range = resolveRange(rangeHeader, meta.size);
-
-  if (range.kind === "unsatisfiable") {
-    headers.set("Content-Range", "bytes */" + meta.size);
-    headers.set("Content-Type", "application/json");
-    headers.set("Cache-Control", "no-store");
-    return new Response(JSON.stringify({ error: "range_not_satisfiable" }), { status: 416, headers });
+  if (options.range && ifRange !== null) {
+    // If-Range goes upstream as If-Match on the ranged GET, so a 206 is always
+    // cut from the version the client already holds.
+    const tag = ifRangeEtag(ifRange);
+    if (tag === null) options.range = undefined; // date validators: send the whole file
+    else options.ifMatch = tag;
   }
 
-  const head = request.method === "HEAD";
+  let result = await storage.get(key, options);
+  if (result?.status === 412) {
+    // The client's copy is stale, so If-Range asks for the whole current file.
+    result = await storage.get(key, conditions(request));
+  }
+  if (!result) return notFound();
+
+  const headers = mediaHeaders(contentType);
+  switch (result.status) {
+    case 304:
+      headers.set("ETag", result.httpEtag);
+      return new Response(null, { status: 304, headers });
+    case 416:
+      return rangeNotSatisfiable(headers, result.size);
+    case 200:
+      headers.set("ETag", result.meta.httpEtag);
+      headers.set("Content-Length", String(result.meta.size));
+      return new Response(result.body, { status: 200, headers });
+    case 206:
+      headers.set("ETag", result.meta.httpEtag);
+      headers.set("Content-Range", contentRange(result.offset, result.length, result.meta.size));
+      headers.set("Content-Length", String(result.length));
+      return new Response(result.body, { status: 206, headers });
+    default:
+      return unexpected(result);
+  }
+}
+
+/** HEAD: one storage HEAD, with conditions and Range evaluated here. */
+async function headMedia(request: Request, storage: Storage, key: string, contentType: string): Promise<Response> {
+  const meta = await storage.head(key);
+  if (!meta) return notFound();
+  const headers = mediaHeaders(contentType);
+  headers.set("ETag", meta.httpEtag);
+  if (etagMatches(request.headers.get("If-None-Match"), meta.etag)) return new Response(null, { status: 304, headers });
+
+  const ifRange = request.headers.get("If-Range");
+  const rangeHeader = ifRange === null || ifRangeEtag(ifRange) === meta.etag ? request.headers.get("Range") : null;
+  const range = resolveRange(rangeHeader, meta.size);
+  if (range.kind === "unsatisfiable") return rangeNotSatisfiable(headers, meta.size);
   if (range.kind === "none") {
     headers.set("Content-Length", String(meta.size));
-    if (head) return new Response(null, { status: 200, headers });
-    const object = await env.BUCKET.get(key);
-    if (!object) return notFound();
-    return new Response(object.body, { status: 200, headers });
+    return new Response(null, { status: 200, headers });
   }
-
-  const end = range.offset + range.length - 1;
-  headers.set("Content-Range", "bytes " + range.offset + "-" + end + "/" + meta.size);
+  headers.set("Content-Range", contentRange(range.offset, range.length, meta.size));
   headers.set("Content-Length", String(range.length));
-  if (head) return new Response(null, { status: 206, headers });
-  const object = await env.BUCKET.get(key, { range: { offset: range.offset, length: range.length } });
-  if (!object) return notFound();
-  return new Response(object.body, { status: 206, headers });
+  return new Response(null, { status: 206, headers });
 }
 
 // ---------- admin routes ----------
@@ -209,20 +270,14 @@ function contentTypeForKey(key: string): string {
 
 async function adminList(url: URL, env: Env): Promise<Response> {
   const prefix = url.searchParams.get("prefix") ?? undefined;
-  const objects: { key: string; size: number; etag: string; sha256: string | null }[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await env.BUCKET.list({ prefix, cursor, limit: LIST_PAGE, include: ["customMetadata"] });
-    for (const object of page.objects) {
-      objects.push({
-        key: object.key,
-        size: object.size,
-        etag: object.etag,
-        sha256: object.customMetadata?.sha256 ?? null,
-      });
-    }
-    cursor = page.truncated ? page.cursor : undefined;
-  } while (cursor);
+  // B2 listings carry no custom metadata, so sha256 is null there; the ingest
+  // script then compares the MD5 ETag of single-part uploads instead.
+  const objects = (await storageFor(env).list(prefix)).map((object) => ({
+    key: object.key,
+    size: object.size,
+    etag: object.etag,
+    sha256: object.sha256 ?? null,
+  }));
   return json({ objects });
 }
 
@@ -234,33 +289,32 @@ async function adminPut(request: Request, env: Env, key: string): Promise<Respon
     sha256 = shaHeader.trim().toLowerCase();
   }
 
-  // R2 needs a body of known length; buffer chunked uploads.
+  // Storage needs a body of known length; buffer chunked uploads.
   const declared = request.headers.get("Content-Length");
   let body: ReadableStream | ArrayBuffer | null = request.body;
+  let length: number | undefined;
   if (declared === null || body === null) {
     body = await request.arrayBuffer();
     if (body.byteLength === 0) return error(400, "empty_body");
   } else if (Number(declared) === 0) {
     return error(400, "empty_body");
+  } else {
+    length = Number(declared);
   }
 
-  let object: R2Object | null;
+  let object: StoredObject;
   try {
-    object = await env.BUCKET.put(key, body, {
-      httpMetadata: { contentType: contentTypeForKey(key) },
-      customMetadata: sha256 ? { sha256 } : undefined,
-      sha256, // R2 rejects the upload if the body does not hash to this value
-    });
+    // The store rejects the upload if the body does not hash to sha256.
+    object = await storageFor(env).put(key, body, { contentType: contentTypeForKey(key), sha256, length });
   } catch (err) {
-    if (sha256) return error(400, "sha256_mismatch");
+    if (err instanceof ChecksumMismatch) return error(400, "sha256_mismatch");
     throw err;
   }
-  if (!object) return error(500, "put_failed");
   return json({ key: object.key, size: object.size, etag: object.etag });
 }
 
 async function adminDelete(env: Env, key: string): Promise<Response> {
-  await env.BUCKET.delete(key);
+  await storageFor(env).delete(key);
   return json({ deleted: key });
 }
 

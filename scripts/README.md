@@ -1,6 +1,6 @@
 # Ingest scripts
 
-`ingest.py` turns your own music files into what the Worker serves from R2 (see `docs/contract.md`): one AAC 256 kbps `.m4a` per song, optional 600x600 cover art, and a `library.json` listing all 888 songs from `data/core-library.csv`. It needs Python 3.9+ and `ffmpeg`/`ffprobe` (`brew install ffmpeg`), nothing else.
+`ingest.py` turns your own music files into what the Worker serves from the private B2 bucket (see `docs/contract.md`): one AAC 256 kbps `.m4a` per song, optional 600x600 cover art, and a `library.json` listing all 888 songs from `data/core-library.csv`. It needs Python 3.9+ and `ffmpeg`/`ffprobe` (`brew install ffmpeg`), nothing else.
 
 ## Where to put your music
 
@@ -8,7 +8,7 @@ Anywhere. Point `--source` at one or more folders and they are scanned recursive
 
 ## Running it
 
-From the repo root:
+From the repo root, after `worker/scripts/setup.sh` has written `worker/.secrets.local`:
 
 ```sh
 # 1. find a file for every song; writes scripts/build/match-report.csv
@@ -21,14 +21,14 @@ python3 scripts/ingest.py encode
 python3 scripts/ingest.py manifest
 
 # 4. upload what changed, library.json last (see the token section below)
-python3 scripts/ingest.py upload --url https://prag-music.<account>.workers.dev --dry-run
-python3 scripts/ingest.py upload --url https://prag-music.<account>.workers.dev
+python3 scripts/ingest.py upload --dry-run
+python3 scripts/ingest.py upload
 
 # or all four in one go
-python3 scripts/ingest.py all --source ~/Music/Rips --url https://prag-music.<account>.workers.dev
+python3 scripts/ingest.py all --source ~/Music/Rips
 ```
 
-Every step can be rerun safely. Probe results and hashes are cached in `scripts/build/cache/`, encode skips songs whose output is newer than the source, the manifest keeps the old `library.json` when nothing but the timestamp would change, and upload sends only objects whose sha256 (or size, or MD5 ETag) differs from what is in R2. `--force` on upload resends everything.
+Every step can be rerun safely. Probe results and hashes are cached in `scripts/build/cache/`, encode skips songs whose output is newer than the source, the manifest keeps the old `library.json` when nothing but the timestamp would change, and upload sends only objects whose size or content differs from what is in the bucket. Content is compared by sha256 when the listing has one; B2 listings never do, so it falls back to the MD5 ETag, which matches because uploads are single-part. `--force` on upload resends everything. B2 keeps a replaced file for about a day before deleting it, so a full `--force` resend of the 6.4 GB library would briefly need about 12.8 GB and stop at the 10 GB free limit; resend only what changed instead.
 
 ## Reading the match report
 
@@ -52,13 +52,13 @@ track_id,file_path
 
 The track id is the last part of the Spotify URI (it is also the first column of the match report). Relative paths are resolved from the repo root, `~` works, and a `-` (or empty) path forces the song to stay missing. Rerun `match` after editing; overrides win over everything else.
 
-## Admin token
+## Server address and admin token
 
-`upload` sends `Authorization: Bearer <ADMIN_TOKEN>`. It reads the token from the `PRAG_MUSIC_ADMIN_TOKEN` environment variable, or from a line `ADMIN_TOKEN=...` in `worker/.secrets.local` if that file exists. A 401 stops the run straight away. If any upload fails after retries, `library.json` is not updated, so the app never points at audio that is not there; rerun to retry.
+`upload` (and `all`) sends to `--url` if given, otherwise to `PRAG_MUSIC_URL` from `worker/.secrets.local`. It sends `Authorization: Bearer <ADMIN_TOKEN>`, reading the token from the `PRAG_MUSIC_ADMIN_TOKEN` environment variable, or from the `ADMIN_TOKEN=...` line in `worker/.secrets.local`. A 401 stops the run straight away. If any upload fails after retries, `library.json` is not updated, so the app never points at audio that is not there; rerun to retry.
 
 ## Notes
 
 - Titles and artists in `library.json` always come from the Spotify CSV. File tags only supply `album`.
-- The manifest publishes audio only for songs that are `matched` in the current report, so un-matching a song (or forcing it to `-`) removes it from the app on the next upload. The object itself stays in R2; delete it with `DELETE /admin/objects/<key>` if you want the space back.
+- The manifest publishes audio only for songs that are `matched` in the current report, so un-matching a song (or forcing it to `-`) removes it from the app on the next upload. The object itself stays in the bucket; delete it with `DELETE /admin/objects/<key>` if you want the space back (B2 frees it a day later).
 - Sources above 48 kHz are resampled to 48 or 44.1 kHz, and surround is downmixed to stereo. Cover art comes from the file's embedded picture, or from a `cover.jpg`/`folder.jpg`/`front.jpg` next to the file.
 - Other options: `--build-dir`, `--csv`, `--playlists`, `--overrides` (defaults as above).

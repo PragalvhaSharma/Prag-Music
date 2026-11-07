@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Prag Music ingest pipeline.
 
-Turns your own music files into the R2 layout described in docs/contract.md.
+Turns your own music files into the bucket layout described in docs/contract.md.
 
   match     find the best local file for every song in data/core-library.csv
   encode    write build/audio/<id>.m4a (AAC 256 kbps, +faststart) and build/art/<id>.jpg
@@ -1002,7 +1002,7 @@ def needs_upload(local: dict, remote: dict | None) -> bool:
     if remote.get("sha256"):
         return remote["sha256"].lower() != local["sha256"]
     etag = (remote.get("etag") or "").strip('"').lower()
-    return etag != local["md5"]    # R2 single-part ETag is the MD5 of the body
+    return etag != local["md5"]    # B2/R2 single-part ETag is the MD5 of the body
 
 
 def cmd_upload(args) -> dict:
@@ -1066,6 +1066,9 @@ def cmd_upload(args) -> dict:
             resp = json.loads(raw.decode("utf-8") or "{}")
             if resp.get("size") is not None and int(resp["size"]) != o["size"]:
                 raise RuntimeError(f"server stored {resp['size']} bytes, expected {o['size']}")
+            stored_etag = (resp.get("etag") or "").strip('"').lower()
+            if not stored_etag or stored_etag != o["md5"]:
+                raise RuntimeError(f"server stored a different body (etag {stored_etag}, expected md5 {o['md5']})")
             with lock:
                 done.append(o["key"])
                 n = len(done)
@@ -1083,7 +1086,9 @@ def cmd_upload(args) -> dict:
     if lib_changed:
         put_lib = http_call("PUT", f"{base}/admin/objects/library.json", token, lib_bytes,
                             {"Content-Type": "application/json", "X-Content-SHA256": lib_obj["sha256"]})
-        json.loads(put_lib.decode("utf-8") or "{}")
+        lib_resp = json.loads(put_lib.decode("utf-8") or "{}")
+        if (lib_resp.get("etag") or "").strip('"').lower() != lib_obj["md5"]:
+            die("library.json upload did not verify (etag mismatch). Rerun upload.")
     log(f"Upload done: {len(done)} objects uploaded, library.json {'updated' if lib_changed else 'already current'}.")
     return {"uploaded": len(done), "library": lib_changed}
 
@@ -1106,7 +1111,7 @@ def main(argv=None) -> None:
     common.add_argument("--playlists", type=Path, default=DEFAULT_PLAYLISTS, help="default: data/playlists.json")
     common.add_argument("--overrides", type=Path, default=DEFAULT_OVERRIDES, help="default: data/overrides.csv")
 
-    ap = argparse.ArgumentParser(description="Prag Music ingest: local files -> R2 layout (docs/contract.md)")
+    ap = argparse.ArgumentParser(description="Prag Music ingest: local files -> bucket layout (docs/contract.md)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     def src_arg(p):

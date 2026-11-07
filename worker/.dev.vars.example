@@ -1,3 +1,9 @@
 # Copy to .dev.vars for `npm run dev` (wrangler dev). Any random strings work locally.
 APP_TOKEN=replace-with-a-long-random-app-token
 ADMIN_TOKEN=replace-with-a-long-random-admin-token
+# Local dev reads and writes the real B2 bucket; copy these from worker/.secrets.local.
+B2_ENDPOINT=https://s3.us-west-004.backblazeb2.com
+B2_REGION=us-west-004
+B2_BUCKET=prag-music-xxxxxxxx
+B2_KEY_ID=replace-with-bucket-key-id
+B2_APP_KEY=replace-with-bucket-app-key

@@ -17,5 +17,8 @@
     "typescript": "^5.9.0",
     "vitest": "^5.1.0",
     "wrangler": "^4.158.0"
+  },
+  "dependencies": {
+    "aws4fetch": "^1.0.20"
   }
 }

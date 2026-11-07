@@ -8,6 +8,8 @@ export default defineConfig({
       miniflare: {
         // Fixed test secrets; these override any local .dev.vars.
         bindings: { APP_TOKEN: "test-app-token", ADMIN_TOKEN: "test-admin-token" },
+        // Production stores files in Backblaze B2; tests use an in-memory R2 bucket.
+        r2Buckets: ["BUCKET"],
       },
     }),
   ],

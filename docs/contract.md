@@ -8,7 +8,9 @@ Every part of the project (the Expo app, the Cloudflare Worker in `worker/`, and
 - `data/playlists.json`: `{ "playlists": [{ "id", "name", "spotifyUri", "trackIds": [ordered track ids] }] }`. Currently `no-bad-songs` (NO BAD SONGS) and `ye-plus-plus` (ye ++).
 - `data/overrides.csv` (optional, written by hand): `track_id,file_path` to force a match.
 
-## R2 bucket layout (bucket name `prag-music`, Worker binding `BUCKET`)
+## Bucket layout
+
+A private Backblaze B2 bucket named `prag-music-<hex>` (created by `worker/scripts/setup.sh`), which the Worker reaches through B2's S3-compatible API. Tests use a miniflare R2 bucket bound as `BUCKET` with the same layout; the Worker uses `BUCKET` whenever it is bound, and B2 otherwise.
 
 - `library.json`: the manifest below.
 - `audio/<trackId>.m4a`: AAC in MP4, 256 kbps, `+faststart` so playback can start before the file finishes downloading.
@@ -52,12 +54,12 @@ Auth for reads: `Authorization: Bearer <APP_TOKEN>` header, or `?token=<APP_TOKE
 | Method | Path | Auth | Behaviour |
 |---|---|---|---|
 | GET | `/health` | none | `200 {"ok":true}` |
-| GET | `/library` | app | R2 `library.json`. `Content-Type: application/json`, `Cache-Control: no-cache`, `ETag`; honours `If-None-Match` with 304. 404 if not uploaded yet. |
-| GET, HEAD | `/audio/<trackId>` | app | R2 `audio/<trackId>.m4a`. `Content-Type: audio/mp4`, `Accept-Ranges: bytes`, `Content-Length`, `ETag`, `Cache-Control: private, max-age=31536000, immutable`. Supports `Range: bytes=a-b`, `bytes=a-`, `bytes=-n` with `206` and `Content-Range`; unsatisfiable range gives `416`. 404 if missing. |
-| GET, HEAD | `/art/<trackId>` | app | R2 `art/<trackId>.jpg`, `Content-Type: image/jpeg`, same caching. |
-| GET | `/admin/objects?prefix=<p>` | admin | `200 {"objects":[{"key","size","etag","sha256"}]}` listing everything (paginate R2 internally). `sha256` comes from R2 custom metadata, may be null. |
-| PUT | `/admin/objects/<key>` | admin | Stores the raw body. Optional header `X-Content-SHA256` is saved as custom metadata `sha256`. Keys allowed: `library.json`, `audio/<id>.m4a`, `art/<id>.jpg` where id matches `^[A-Za-z0-9]{22}$`; anything else gives 400. Returns `200 {"key","size","etag"}`. |
+| GET | `/library` | app | Bucket `library.json`. `Content-Type: application/json`, `Cache-Control: no-cache`, `ETag`; honours `If-None-Match` with 304. 404 if not uploaded yet. |
+| GET, HEAD | `/audio/<trackId>` | app | Bucket `audio/<trackId>.m4a`. `Content-Type: audio/mp4`, `Accept-Ranges: bytes`, `Content-Length`, `ETag`, `Cache-Control: private, max-age=31536000, immutable`. Supports `Range: bytes=a-b`, `bytes=a-`, `bytes=-n` with `206` and `Content-Range`; unsatisfiable range gives `416`. 404 if missing. |
+| GET, HEAD | `/art/<trackId>` | app | Bucket `art/<trackId>.jpg`, `Content-Type: image/jpeg`, same caching. |
+| GET | `/admin/objects?prefix=<p>` | admin | `200 {"objects":[{"key","size","etag","sha256"}]}` listing everything (paginated internally). `etag` is the MD5 of the body (uploads are single-part). `sha256` comes from object metadata and may be null; on B2 it is always null, because listings carry no metadata. |
+| PUT | `/admin/objects/<key>` | admin | Stores the raw body. Optional header `X-Content-SHA256` is verified by the store (B2 checks it as the signed payload hash) and saved as object metadata `sha256`; a mismatch gives `400 {"error":"sha256_mismatch"}` and stores nothing. Keys allowed: `library.json`, `audio/<id>.m4a`, `art/<id>.jpg` where id matches `^[A-Za-z0-9]{22}$`; anything else gives 400. Returns `200 {"key","size","etag"}`. |
 | DELETE | `/admin/objects/<key>` | admin | Deletes. `200 {"deleted":"<key>"}`. |
 
-Admin auth: `Authorization: Bearer <ADMIN_TOKEN>` header only. Secrets `APP_TOKEN` and `ADMIN_TOKEN` are Worker secrets (`wrangler secret put`), and `.dev.vars` for local dev. CORS: allow any origin for GET/HEAD with the Authorization header (handy for the web build). Max upload body is 100 MB on the free plan; songs are about 5 to 15 MB.
+Admin auth: `Authorization: Bearer <ADMIN_TOKEN>` header only. Worker secrets (uploaded by `worker/scripts/setup.sh` with `wrangler secret bulk`, and `.dev.vars` for local dev): `APP_TOKEN`, `ADMIN_TOKEN`, `B2_ENDPOINT`, `B2_REGION`, `B2_BUCKET`, `B2_KEY_ID`, `B2_APP_KEY`. `wrangler.jsonc` has no bindings. CORS: allow any origin for GET/HEAD with the Authorization header (handy for the web build). Max upload body is 100 MB on the free plan; songs are about 5 to 15 MB.
 
