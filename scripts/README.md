@@ -58,6 +58,7 @@ The track id is the last part of the Spotify URI (it is also the first column of
 
 ## Notes
 
+- `watch_ingest.py <folder>` keeps a download folder in sync while files arrive. Files named `<spotify track id> - <title>.mp3` are pinned to that song (no fuzzy matching), files more than 30 s off Spotify's length are held back and listed in `build/watch-review.csv`, and a run is skipped if it would take audio away from a song that is already live. It exits once the downloader (`--downloader`, default `spotmate_batch`) has stopped and no new files have arrived for 30 minutes.
 - Titles and artists in `library.json` always come from the Spotify CSV. File tags only supply `album`.
 - The manifest publishes audio only for songs that are `matched` in the current report, so un-matching a song (or forcing it to `-`) removes it from the app on the next upload. The object itself stays in the bucket; delete it with `DELETE /admin/objects/<key>` if you want the space back (B2 frees it a day later).
 - Sources above 48 kHz are resampled to 48 or 44.1 kHz, and surround is downmixed to stereo. Cover art comes from the file's embedded picture, or from a `cover.jpg`/`folder.jpg`/`front.jpg` next to the file.
