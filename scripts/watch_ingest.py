@@ -14,6 +14,9 @@ Safety checks before each run:
   - if a song that is live in library.json would lose its audio, the run is skipped
   - after 3 failed runs on the same folder state it waits for the folder to change
 
+With --archive, songs verified in the bucket after each successful run have their
+download and encoded copy moved to the Trash ("ingest.py archive"); they stay in the app.
+
 It keeps going while the downloader (--downloader pattern) is running and exits
 once that is gone and no new files arrived for --idle-exit seconds.
 
@@ -24,6 +27,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import re
 import subprocess
 import sys
@@ -39,6 +43,7 @@ BUILD = SCRIPTS_DIR / "build"
 GENERATED = BUILD / "watch-overrides.csv"
 REVIEW = BUILD / "watch-review.csv"
 LIBRARY = BUILD / "library.json"
+ARCHIVED = BUILD / "archived.json"
 NAME_RE = re.compile(r"^([A-Za-z0-9]{22}) - .+\.(mp3|m4a|aac|flac|wav|aiff|ogg|opus)$", re.I)
 _durations: dict = {}
 
@@ -155,10 +160,20 @@ def live_audio_ids() -> set[str]:
     return {t["id"] for t in doc.get("tracks", []) if t.get("audioKey")}
 
 
+def archived_ids() -> set[str]:
+    """Songs whose local files were archived after upload; ingest.py keeps them live without a file."""
+    try:
+        doc = json.loads(ARCHIVED.read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError):
+        return set()
+    return {tid for tid, e in (doc.get("tracks") or {}).items() if e.get("audioKey")}
+
+
 def downloader_running(pattern: str) -> bool:
     if not pattern:
         return False
-    return subprocess.run(["pgrep", "-f", pattern], capture_output=True).returncode == 0
+    out = subprocess.run(["pgrep", "-f", pattern], capture_output=True, text=True).stdout.split()
+    return any(int(pid) != os.getpid() for pid in out if pid.isdigit())   # our own argv holds the pattern
 
 
 def main() -> None:
@@ -173,6 +188,8 @@ def main() -> None:
                     help="extra overrides csv to merge in (data/overrides.csv is always included)")
     ap.add_argument("--fuzzy", action="store_true", help="let ingest.py fuzzy match songs with no id-named file")
     ap.add_argument("--allow-removals", action="store_true", help="run even if live songs would lose their audio")
+    ap.add_argument("--archive", action="store_true",
+                    help="after each successful run, move local copies of uploaded songs to the Trash")
     ap.add_argument("--once", action="store_true", help="run one pass and exit")
     args = ap.parse_args()
     folder = args.folder.expanduser().resolve()
@@ -192,7 +209,7 @@ def main() -> None:
             rows, review = plan(files, core, extra, args.max_drift, args.fuzzy)
             write_csv(REVIEW, ["track_id", "name", "artist", "spotify_sec", "file_sec", "drift_sec", "action", "file"],
                       review)
-            lost = sorted(t for t in live_audio_ids() if rows.get(t) == "-")
+            lost = sorted(t for t in live_audio_ids() - archived_ids() if rows.get(t) == "-")
             if lost and not args.allow_removals:
                 log(f"skipping run: {len(lost)} live songs would lose their audio ({', '.join(lost[:5])}); "
                     "restore their files or pass --allow-removals")
@@ -206,6 +223,15 @@ def main() -> None:
                 if rc == 0:
                     pushed, failures = state, 0
                     log(f"ingest ok: {len(live_audio_ids())} songs live in the app")
+                    if args.archive:
+                        arc = subprocess.run([sys.executable, str(INGEST), "archive", "--source", str(folder)],
+                                             cwd=REPO_ROOT)
+                        if arc.returncode == 0:
+                            # forget only the files archive moved; anything that landed meanwhile stays new
+                            still = finished_files(folder)
+                            pushed = {t: v for t, v in state.items() if t in still and still[t][1:] == v}
+                        else:
+                            log(f"archive exited {arc.returncode}; local files kept")
                 else:
                     failures = failures + 1 if state == failed_state else 1
                     failed_state = state

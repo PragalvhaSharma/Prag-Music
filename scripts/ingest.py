@@ -8,6 +8,7 @@ Turns your own music files into the bucket layout described in docs/contract.md.
   manifest  write build/library.json listing all tracks (contract manifest version 1)
   upload    push new or changed objects through the Worker admin API, library.json last
   all       match, encode, manifest and upload in that order
+  archive   move local files of songs verified in the bucket to the Trash; they stay in the app
 
 Standard library only, plus ffmpeg and ffprobe on PATH. See scripts/README.md.
 """
@@ -99,6 +100,7 @@ class Build:
         self.audio = root / "audio"
         self.art = root / "art"
         self.library = root / "library.json"
+        self.archived = root / "archived.json"
         cache = root / "cache"
         self.probe_cache = cache / "probe.json"
         self.hash_cache = cache / "hashes.json"
@@ -852,6 +854,7 @@ def cmd_manifest(args) -> dict:
     build = Build(args.build_dir)
     tracks = load_tracks(args.csv)
     playlists = load_playlists(args.playlists, {t["id"] for t in tracks})
+    archived = load_archived(build)
     cache = JsonCache(build.hash_cache)
     audio_paths = {t["id"]: build.audio / f"{t['id']}.m4a" for t in tracks}
     present = [tid for tid, p in audio_paths.items() if p.exists()]
@@ -870,11 +873,23 @@ def cmd_manifest(args) -> dict:
     cache.save()
 
     entries = []
+    kept = 0
     for t in tracks:
         tid = t["id"]
         d = digests.get(tid)
         p = (d or {}).get("probe") or {}
         has_audio = bool(d and p.get("has_audio"))
+        if not has_audio and tid in archived:
+            # local files were removed after the upload was verified; keep publishing the bucket copy
+            a = archived[tid]
+            kept += 1
+            entries.append({
+                "id": tid, "title": t["name"], "artist": t["artist"], "album": a.get("album"),
+                "durationSec": a.get("durationSec") or t["duration"], "spotifyUri": t["uri"],
+                "audioKey": a["audioKey"], "artKey": a.get("artKey"), "bytes": a.get("bytes"),
+                "sha256": a.get("sha256"), "bitrateKbps": a.get("bitrateKbps"),
+            })
+            continue
         art = build.art / f"{tid}.jpg"
         art_ok = art.exists() and (allowed is None or tid in allowed)
         dur = p.get("duration") if has_audio else None
@@ -913,7 +928,41 @@ def cmd_manifest(args) -> dict:
     total_mb = sum(e["bytes"] or 0 for e in entries) / 1e6
     log(f"Manifest: {len(entries)} tracks, {with_audio} with audio ({total_mb:.1f} MB), {with_art} with art, "
         f"{len(playlists)} playlists -> {build.library}")
+    if kept:
+        log(f"  {kept} of those are archived (bucket copy only, see {build.archived.name})")
     return {"tracks": len(entries), "audio": with_audio, "art": with_art}
+
+
+def load_archived(build: Build) -> dict:
+    """track_id -> manifest entry for songs whose local files were archived after a verified upload."""
+    try:
+        doc = json.loads(build.archived.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except ValueError:
+        die(f"{build.archived} is not valid JSON; fix or restore it before continuing")
+    tracks = doc.get("tracks") if isinstance(doc, dict) else None
+    if not isinstance(tracks, dict):
+        die(f"{build.archived} should look like {{\"tracks\": {{track_id: entry}}}}; fix or restore it")
+    return {tid: e for tid, e in tracks.items() if isinstance(e, dict) and e.get("audioKey")}
+
+
+ARCHIVE_FIELDS = ("audioKey", "artKey", "bytes", "sha256", "bitrateKbps", "album", "durationSec")
+
+
+def refresh_archived(build: Build, lib: dict) -> None:
+    """After library.json is live, point archive entries at what is now published, so a song that was
+    downloaded and uploaded again falls back to its current bucket copy, not the older one."""
+    archived = load_archived(build)
+    changed = 0
+    for t in lib.get("tracks", []):
+        a = archived.get(t["id"])
+        if a and t.get("audioKey") and a.get("sha256") != t.get("sha256"):
+            archived[t["id"]] = {k: t.get(k) for k in ARCHIVE_FIELDS}
+            changed += 1
+    if changed:
+        write_json_atomic(build.archived, {"version": 1, "tracks": archived}, indent=1)
+        log(f"Updated {changed} archive entries to the newly published copies")
 
 
 # --------------------------------------------------------------------------- upload
@@ -1013,22 +1062,30 @@ def cmd_upload(args) -> dict:
     if not base:
         die("no Worker URL: pass --url or run worker/scripts/setup.sh so worker/.secrets.local has PRAG_MUSIC_URL")
     lib = json.loads(build.library.read_text(encoding="utf-8"))
+    archived = load_archived(build)
     cache = JsonCache(build.hash_cache)
     local = []
+    expected = []      # (key, size) already in the bucket with no local copy (archived songs)
     for t in lib.get("tracks", []):
         if t.get("audioKey"):
             path = build.root / t["audioKey"]
             if not path.exists():
-                die(f"{path} is listed in library.json but missing; rerun encode and manifest")
-            d = file_digest(path, cache, False)
-            if d["sha256"] != t.get("sha256"):
-                die(f"{path} changed since library.json was written; rerun manifest")
-            local.append({"key": t["audioKey"], "path": path, "type": "audio/mp4", **d})
+                a = archived.get(t["id"])
+                if not (a and a["audioKey"] == t["audioKey"] and a.get("sha256") == t.get("sha256")):
+                    die(f"{path} is listed in library.json but missing; rerun encode and manifest")
+                expected.append((t["audioKey"], a.get("bytes")))
+            else:
+                d = file_digest(path, cache, False)
+                if d["sha256"] != t.get("sha256"):
+                    die(f"{path} changed since library.json was written; rerun manifest")
+                local.append({"key": t["audioKey"], "path": path, "type": "audio/mp4", **d})
         if t.get("artKey"):
             path = build.root / t["artKey"]
             if path.exists():
                 local.append({"key": t["artKey"], "path": path, "type": "image/jpeg",
                               **file_digest(path, cache, False)})
+            elif t["id"] in archived:
+                expected.append((t["artKey"], None))
     cache.save()
     lib_bytes = build.library.read_bytes()
     lib_obj = {"key": "library.json", "path": build.library, "type": "application/json",
@@ -1038,6 +1095,12 @@ def cmd_upload(args) -> dict:
     token = admin_token()
     log(f"Listing objects at {base} ...")
     remote = list_remote(base, token)
+    gone = [k for k, size in expected
+            if k not in remote or (size is not None and remote[k].get("size") is not None
+                                   and int(remote[k]["size"]) != int(size))]
+    if gone:
+        die(f"{len(gone)} archived objects are missing or wrong in the bucket (e.g. {gone[0]}); "
+            "library.json was NOT updated. Restore those songs' files or remove them from archived.json.")
     todo = [o for o in local if args.force or needs_upload(o, remote.get(o["key"]))]
     lib_changed = args.force or needs_upload(lib_obj, remote.get("library.json"))
     mb = sum(o["size"] for o in todo) / 1e6
@@ -1089,8 +1152,128 @@ def cmd_upload(args) -> dict:
         lib_resp = json.loads(put_lib.decode("utf-8") or "{}")
         if (lib_resp.get("etag") or "").strip('"').lower() != lib_obj["md5"]:
             die("library.json upload did not verify (etag mismatch). Rerun upload.")
+    refresh_archived(build, lib)
     log(f"Upload done: {len(done)} objects uploaded, library.json {'updated' if lib_changed else 'already current'}.")
     return {"uploaded": len(done), "library": lib_changed}
+
+
+# --------------------------------------------------------------------------- archive
+
+def _trash_move(path: Path, dest_dir: Path) -> int:
+    size = path.stat().st_size
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / path.name
+    n = 1
+    while dest.exists():
+        dest = dest_dir / f"{path.stem} ({n}){path.suffix}"
+        n += 1
+    shutil.move(str(path), str(dest))
+    return size
+
+
+def cmd_archive(args) -> dict:
+    """Move local copies of songs that are verified in the bucket to the Trash and record them in
+    build/archived.json so manifest/upload keep publishing them. Delete a song's entry from
+    archived.json to take it out of the app."""
+    build = Build(args.build_dir)
+    if not build.library.exists():
+        die(f"no manifest at {build.library}; run the pipeline first")
+    base = (args.url or secrets_value("PRAG_MUSIC_URL") or "").rstrip("/")
+    if not base:
+        die("no Worker URL: pass --url or set PRAG_MUSIC_URL in worker/.secrets.local")
+    lib_bytes = build.library.read_bytes()
+    lib = json.loads(lib_bytes.decode("utf-8"))
+    token = admin_token()
+    log(f"Listing objects at {base} ...")
+    remote = list_remote(base, token)
+    lib_obj = {"size": len(lib_bytes), "sha256": hashlib.sha256(lib_bytes).hexdigest(),
+               "md5": hashlib.md5(lib_bytes).hexdigest()}
+    if needs_upload(lib_obj, remote.get("library.json")):
+        die("the live library.json differs from build/library.json; run upload first so only live songs are archived")
+
+    archived = load_archived(build)
+    roots = [Path(os.path.expanduser(str(s))).resolve() for s in args.source]
+    try:
+        enc_state = json.loads(build.encode_state.read_text(encoding="utf-8"))
+    except (FileNotFoundError, ValueError):
+        enc_state = {}
+    cache = JsonCache(build.hash_cache)
+    verified, skipped = {}, []
+    for t in lib.get("tracks", []):
+        tid, key = t["id"], t.get("audioKey")
+        if not key:
+            continue
+        m4a = build.root / key
+        r = remote.get(key)
+        if m4a.exists():
+            d = file_digest(m4a, cache, False)
+            if d["sha256"] != t.get("sha256") or needs_upload(d, r):
+                skipped.append((tid, "bucket copy does not match the local encode"))
+                continue
+        elif tid in archived:
+            if r is None:
+                skipped.append((tid, "archived but missing from the bucket"))
+                continue
+        else:
+            skipped.append((tid, "no local encode to verify against"))
+            continue
+        if t.get("artKey") and t["artKey"] not in remote:
+            skipped.append((tid, "cover art not in the bucket"))
+            continue
+        verified[tid] = t
+    cache.save()
+
+    def in_roots(p: Path) -> bool:
+        return any(p == root or root in p.parents for root in roots)
+
+    # a source file is moved only if it is the exact file the verified encode was made from:
+    # encode-state names it, the encode is still on disk, and the file is not newer than the encode
+    sources_in_use = {}
+    for tid, s in enc_state.items():
+        if s.get("source"):
+            sources_in_use.setdefault(str(Path(s["source"]).resolve()), set()).add(tid)
+    moves = []    # (track id, path)
+    for tid in verified:
+        files = set()
+        m4a = build.root / verified[tid]["audioKey"]
+        src = (enc_state.get(tid) or {}).get("source")
+        if m4a.exists() and src:
+            fp = Path(src).resolve()
+            if (fp.is_file() and in_roots(fp) and fp.stat().st_mtime <= m4a.stat().st_mtime
+                    and sources_in_use.get(str(fp), set()) <= set(verified)):
+                files.add(fp)
+        if not args.keep_encoded and m4a.exists():
+            files.add(m4a.resolve())
+        moves.extend((tid, p) for p in sorted(files))
+
+    total = sum(p.stat().st_size for _, p in moves)
+    log(f"Verified in the bucket: {len(verified)} songs. Skipped: {len(skipped)}.")
+    for tid, why in skipped[:20]:
+        log(f"  skipped {tid}: {why}")
+    log(f"Files to move: {len(moves)} ({total / 1e9:.2f} GB)")
+    if args.dry_run:
+        for _, p in moves[:20]:
+            log(f"  would move {p}")
+        log("Dry run: nothing moved.")
+        return {"verified": len(verified), "files": len(moves), "bytes": total}
+
+    # record first, so a crash mid-move never leaves a live song without an archive entry
+    doc = {"version": 1, "tracks": dict(archived)}
+    for tid, t in verified.items():
+        doc["tracks"][tid] = {k: t.get(k) for k in ARCHIVE_FIELDS}
+    write_json_atomic(build.archived, doc, indent=1)
+    trash = Path(os.path.expanduser(str(args.trash_dir))) if args.trash_dir else \
+        Path.home() / ".Trash" / f"Prag-Music uploaded songs {dt.date.today().isoformat()}"
+    freed = 0
+    for tid, p in moves:
+        sub = "encoded" if build.audio.resolve() in p.parents else "downloads"
+        try:
+            freed += _trash_move(p, trash / sub)
+        except OSError as e:
+            log(f"  could not move {p}: {e}")
+    log(f"Archived {len(verified)} songs ({len(doc['tracks'])} total in {build.archived.name}); "
+        f"moved {freed / 1e9:.2f} GB to {trash}")
+    return {"verified": len(verified), "files": len(moves), "bytes": freed}
 
 
 # --------------------------------------------------------------------------- CLI
@@ -1138,6 +1321,14 @@ def main(argv=None) -> None:
     src_arg(p)
     upload_args(p)
     p.set_defaults(func=cmd_all)
+    p = sub.add_parser("archive", parents=[common],
+                       help="move local files of songs verified in the bucket to the Trash (they stay in the app)")
+    src_arg(p)
+    p.add_argument("--url", default=None, help="Worker base URL (default: PRAG_MUSIC_URL)")
+    p.add_argument("--dry-run", action="store_true", help="list what would move, move nothing")
+    p.add_argument("--keep-encoded", action="store_true", help="leave build/audio/<id>.m4a in place")
+    p.add_argument("--trash-dir", default=None, help="where to move files (default: a dated folder in ~/.Trash)")
+    p.set_defaults(func=cmd_archive)
 
     args = ap.parse_args(argv)
     for name in ("build_dir", "csv", "playlists", "overrides"):
