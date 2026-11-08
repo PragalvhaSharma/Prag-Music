@@ -13,7 +13,8 @@
       "supportsTablet": false,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
-      }
+      },
+      "appleTeamId": "2N7X58QCS7"
     },
     "android": {
       "package": "com.pragalvhasharma.pragmusic",

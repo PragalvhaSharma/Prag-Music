@@ -38,6 +38,7 @@
     "start:tunnel": "node tools/write-env.mjs && expo start --tunnel",
     "ios": "node tools/write-env.mjs --device && expo run:ios --device",
     "ios:release": "node tools/write-env.mjs --device && expo run:ios --device --configuration Release",
+    "iphone": "bash tools/install-iphone.sh",
     "web": "node tools/write-env.mjs && expo start --web",
     "seed": "node tools/build-seed.mjs",
     "typecheck": "tsc --noEmit",
