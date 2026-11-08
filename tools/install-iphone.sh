@@ -28,6 +28,7 @@ fi
 
 node tools/write-env.mjs --device
 [ -d ios ] || npx expo prebuild --platform ios
+[ -d ios/PragMusic.xcworkspace ] || (cd ios && pod install)
 
 xcodebuild -workspace ios/PragMusic.xcworkspace -scheme PragMusic \
   -configuration Release -destination "id=$UDID" -derivedDataPath ios/build/dd \
