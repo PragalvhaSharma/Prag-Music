@@ -1,6 +1,20 @@
 # Prag Music
 
-My own music app for iPhone. It plays the 888 songs from my Spotify playlists **NO BAD SONGS** and **ye ++**, streamed from a private Backblaze B2 bucket through a Cloudflare Worker. It plays in the background and on the lock screen, and songs can be downloaded for offline listening. The app has no login or setup screen: it opens already connected and plays.
+I like listening to music at 2x speed, and most music apps won't let me. So I built my own iPhone music player that does. That's where it starts, but I'll be adding more features to this.
+
+Prag Music plays the 888 songs from my Spotify playlists **NO BAD SONGS** and **ye ++**, streamed from a private Backblaze B2 bucket through a Cloudflare Worker. It opens already connected, with no login or setup screen, and just plays.
+
+## What it does
+
+- **Playback speed from 0.5x to 2x.** The slider lives on the player screen, and the app remembers your speed between launches.
+- **Background and lock screen playback**, with the usual controls.
+- **Offline downloads.** Long-press a song or tap the download arrow on a playlist to keep it on the phone.
+- **Shuffle and repeat** (one or all) across playlists or the full song list.
+- **Runs without the Mac.** It installs as its own native app with its own icon.
+
+## What's next
+
+This is a personal project that grows as I find things I want. Ideas on the list include more playlists, smarter shuffle, and better ways to add new songs from my phone. If you have an idea, open an issue.
 
 ## How it fits together
 
