@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="%LANG_ISO_CODE%">
+  <head>
+    <meta charset="utf-8" />
+    <meta httpEquiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no" />
+    <meta name="referrer" content="no-referrer" />
+    <title>%WEB_TITLE%</title>
+    <script>
+      // Unlock link: https://prag-music.vercel.app/#key=<APP_TOKEN>. Runs before the app
+      // so the key is saved in this browser (src/lib/config.ts reads it) and removed
+      // from the address bar before Expo Router can keep it as a route parameter.
+      (function () {
+        function take() {
+          try {
+            var key = new URLSearchParams(location.hash.slice(1)).get('key');
+            if (!key || !key.trim()) return false;
+            localStorage.setItem('prag-music:key', key.trim());
+            history.replaceState(null, '', location.pathname + location.search);
+            return true;
+          } catch (e) {
+            return false;
+          }
+        }
+        take();
+        window.addEventListener('hashchange', function () {
+          if (take()) location.reload();
+        });
+      })();
+    </script>
+    <!-- The `react-native-web` recommended style reset: https://necolas.github.io/react-native-web/docs/setup/#root-element -->
+    <style id="expo-reset">
+      /* These styles make the body full-height */
+      html,
+      body {
+        height: 100%;
+        background-color: #0a0a0c;
+      }
+      /* These styles disable body scrolling if you are using <ScrollView> */
+      body {
+        overflow: hidden;
+      }
+      /* These styles make the root element full-height */
+      #root {
+        display: flex;
+        height: 100%;
+        flex: 1;
+      }
+    </style>
+  </head>
+
+  <body>
+    <noscript> You need to enable JavaScript to run this app. </noscript>
+    <div id="root"></div>
+  </body>
+</html>

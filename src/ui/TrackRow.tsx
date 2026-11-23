@@ -24,6 +24,11 @@ function TrackRowInner({ track, onPress, detail }: Props) {
   const available = downloaded || (!!track.audioKey && !!config && !offline);
 
   const showActions = () => {
+    if (Platform.OS === 'web') {
+      // Browsers have no action sheet and downloads are phone only, so the button just queues the song.
+      if (available) playNext(track.id);
+      return;
+    }
     const options: { label: string; run: () => void; destructive?: boolean }[] = [];
     if (available) options.push({ label: 'Play next', run: () => playNext(track.id) });
     if (downloadsSupported && track.audioKey && !downloaded)
@@ -76,9 +81,17 @@ function TrackRowInner({ track, onPress, detail }: Props) {
         {downloaded ? <Ionicons name="arrow-down-circle" size={16} color={colors.accent} /> : null}
         {download?.state === 'error' ? <Ionicons name="alert-circle" size={16} color={colors.danger} /> : null}
         <Text style={styles.meta}>{formatTime(track.durationSec)}</Text>
-        <Pressable hitSlop={10} onPress={showActions}>
-          <Ionicons name="ellipsis-horizontal" size={18} color={colors.textFaint} />
-        </Pressable>
+        {Platform.OS === 'web' ? (
+          available ? (
+            <Pressable hitSlop={10} onPress={showActions} accessibilityLabel="Play next">
+              <Ionicons name="return-down-forward" size={18} color={colors.textFaint} />
+            </Pressable>
+          ) : null
+        ) : (
+          <Pressable hitSlop={10} onPress={showActions}>
+            <Ionicons name="ellipsis-horizontal" size={18} color={colors.textFaint} />
+          </Pressable>
+        )}
       </View>
     </Pressable>
   );

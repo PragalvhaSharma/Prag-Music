@@ -40,6 +40,7 @@
     "ios:release": "node tools/write-env.mjs --device && expo run:ios --device --configuration Release",
     "iphone": "bash tools/install-iphone.sh",
     "web": "node tools/write-env.mjs && expo start --web",
+    "deploy:web": "bash tools/deploy-web.sh",
     "seed": "node tools/build-seed.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "expo lint",

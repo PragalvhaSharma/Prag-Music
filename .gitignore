@@ -31,6 +31,10 @@ yarn-error.*
 .env*
 !.env.example
 
+# Vercel project link for the web build (tools/deploy-web.sh)
+.vercel
+.vercel-web/
+
 # typescript
 *.tsbuildinfo
 

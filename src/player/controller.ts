@@ -333,6 +333,13 @@ export function playTracks(ids: string[], options: PlayOptions = {}): boolean {
   return true;
 }
 
+/** Rebuilds the loaded songs (paused, same spot) so their URLs pick up a new app key. */
+export function reloadSources() {
+  const { index, position, playing } = playerStore.get();
+  if (!playlist || index < 0 || playing) return;
+  loadWindow(index, false, position);
+}
+
 export function togglePlay() {
   if (!playlist || playerStore.get().index < 0) return;
   if (playlist.playing) playlist.pause();

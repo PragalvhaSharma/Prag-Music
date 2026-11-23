@@ -28,7 +28,11 @@
     },
     "web": {
       "favicon": "./assets/favicon.png",
-      "output": "single"
+      "output": "single",
+      "name": "Prag Music",
+      "shortName": "Prag Music",
+      "themeColor": "#0A0A0C",
+      "backgroundColor": "#0A0A0C"
     },
     "plugins": [
       "expo-router",

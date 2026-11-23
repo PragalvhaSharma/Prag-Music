@@ -11,6 +11,7 @@ Prag Music plays the 888 songs from my Spotify playlists **NO BAD SONGS** and **
 - **Offline downloads.** Long-press a song or tap the download arrow on a playlist to keep it on the phone.
 - **Shuffle and repeat** (one or all) across playlists or the full song list.
 - **Runs without the Mac.** It installs as its own native app with its own icon.
+- **Web version** at [prag-music.vercel.app](https://prag-music.vercel.app), with the same library, player and speed slider in any browser.
 
 ## What's next
 
@@ -82,6 +83,20 @@ You need:
    The Release build has everything inside it, so it runs without the Mac. With a free Apple ID, iOS stops opening the app after 7 days; plug in and run `npm run ios:release` again to renew it. A $99/year Apple Developer account makes it last a year.
 
 Expo Go isn't used. An Expo Go project only runs while the Mac is serving it, so the app is built and installed as its own native app with its own icon and lock screen controls.
+
+## Web version
+
+The same Expo app also runs in the browser at [prag-music.vercel.app](https://prag-music.vercel.app). Deploy it with:
+
+```sh
+npm run deploy:web
+```
+
+This builds the site with `expo export`, checks the output, and deploys it to the `prag-music` project on Vercel. The first run creates and links the project.
+
+A website's code is public, so the web build leaves out the app key, and the deploy stops if the key shows up in the output. Each browser is unlocked once: open `https://prag-music.vercel.app/#key=<APP_TOKEN>` with the key from `worker/.secrets.local`, or paste the key into the box on the home screen. The key is saved in that browser and removed from the address bar. The part after `#` never reaches a server, but the browser may keep the link in its history, so on a shared computer paste the key instead. If the key is rotated, the site asks for the new one.
+
+The web version streams only; downloads stay on the phone. In a browser, the arrow next to a song plays it next, and the space bar plays and pauses.
 
 ## Day to day
 

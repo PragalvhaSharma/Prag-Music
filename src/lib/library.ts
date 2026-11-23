@@ -1,6 +1,6 @@
 import seed from '../data/seed-library.json';
 import { ApiError, fetchLibrary } from './api';
-import { serverConfig } from './config';
+import { canEnterKey, forgetWebKey, loadServerConfig, saveWebKey } from './config';
 import { readJson, writeJson } from './persist';
 import { createStore, useStore } from './store';
 import type { Library, Playlist, ServerConfig, Track } from './types';
@@ -55,8 +55,18 @@ export async function initLibrary(): Promise<void> {
     setLibrary(cached.library, 'cache');
     libraryStore.set({ lastSyncedAt: cached.syncedAt });
   }
-  libraryStore.set({ config: serverConfig, ready: true });
-  if (serverConfig) void syncLibrary();
+  const config = loadServerConfig();
+  libraryStore.set({ config, ready: true });
+  if (config) void syncLibrary();
+}
+
+/** Web only: unlocks this browser with the app key and loads the library. */
+export async function unlockWithKey(key: string): Promise<boolean> {
+  const config = saveWebKey(key);
+  if (!config) return false;
+  libraryStore.set({ config, syncError: null });
+  await syncLibrary();
+  return !!libraryStore.get().config;
 }
 
 export async function syncLibrary(): Promise<void> {
@@ -75,7 +85,11 @@ export async function syncLibrary(): Promise<void> {
     }
     libraryStore.set({ lastSyncedAt: now, offline: false });
   } catch (e) {
-    if (e instanceof ApiError) libraryStore.set({ syncError: e.message, offline: false });
+    if (e instanceof ApiError && e.status === 401 && canEnterKey) {
+      // A wrong or rotated key in this browser: drop it so the unlock box shows again.
+      forgetWebKey();
+      libraryStore.set({ config: null, syncError: 'That key did not work. Paste the current app key.', offline: false });
+    } else if (e instanceof ApiError) libraryStore.set({ syncError: e.message, offline: false });
     else libraryStore.set({ syncError: 'Offline. Playing downloaded songs only.', offline: true });
   } finally {
     libraryStore.set({ syncing: false });

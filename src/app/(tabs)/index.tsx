@@ -3,6 +3,7 @@ import { router } from 'expo-router';
 import { useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { canEnterKey } from '../../lib/config';
 import { useDownloadEntries } from '../../lib/downloads';
 import { formatHours } from '../../lib/format';
 import { useConfig, useLibrary, useSyncError, useTracksById } from '../../lib/library';
@@ -11,6 +12,7 @@ import { playTracks, usePlayer } from '../../player/controller';
 import { Artwork } from '../../ui/Artwork';
 import { Button } from '../../ui/Button';
 import { TrackRow } from '../../ui/TrackRow';
+import { UnlockCard } from '../../ui/UnlockCard';
 import { colors, radius } from '../../ui/theme';
 
 export default function Home() {
@@ -38,7 +40,11 @@ export default function Home() {
   );
 
   let status = `${withAudio} of ${library.tracks.length} songs ready${downloaded ? ` · ${downloaded} offline` : ''}`;
-  if (!config) status = `${library.tracks.length} songs · music server not set up yet`;
+  if (!config) {
+    status = canEnterKey
+      ? `${library.tracks.length} songs · locked`
+      : `${library.tracks.length} songs · music server not set up yet`;
+  }
 
   return (
     <ScrollView
@@ -51,6 +57,8 @@ export default function Home() {
         {syncError ? <Text style={styles.warn}>{syncError}</Text> : null}
         {error ? <Text style={styles.warn}>{error}</Text> : null}
       </View>
+
+      {!config && canEnterKey ? <UnlockCard /> : null}
 
       <View style={styles.actions}>
         <Button
