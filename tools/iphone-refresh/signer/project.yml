@@ -1,0 +1,20 @@
+# Placeholder app with the same app ID as Prag Music. Building it is how the refresh job
+# gets a new free 7-day profile from Apple (Xcode only makes profiles while building).
+name: Signer
+options:
+  deploymentTarget:
+    iOS: "16.0"
+targets:
+  Signer:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    info:
+      path: Sources/Info.plist
+      properties:
+        UILaunchScreen: {}
+    settings:
+      base:
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.0"

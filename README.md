@@ -80,7 +80,7 @@ You need:
    - Turn on Developer Mode (Settings > Privacy & Security > Developer Mode) and restart when asked. The switch only shows up after the phone has been plugged into Xcode once.
    - Trust your developer profile (Settings > General > VPN & Device Management > your Apple ID > Trust).
 
-   The Release build has everything inside it, so it runs without the Mac. With a free Apple ID, iOS stops opening the app after 7 days; plug in and run `npm run ios:release` again to renew it. A $99/year Apple Developer account makes it last a year.
+   The Release build has everything inside it, so it runs without the Mac. With a free Apple ID, iOS stops opening the app after 7 days. Run `npm run iphone:auto-refresh` once and the Mac renews it for you: a background job checks every 30 minutes and, when fewer than 3 days are left and the iPhone is unlocked on the same Wi-Fi (or plugged in), re-signs the last `npm run iphone` build and reinstalls it. Your songs and settings stay. Apple only issues a new free profile while the phone is connected, so the phone has to be reachable at least once every few days; if it is not reachable with under a day left, you get a phone notification. Log: `~/Library/Logs/prag-music-refresh.log`. A $99/year Apple Developer account makes each install last a year.
 
 Expo Go isn't used. An Expo Go project only runs while the Mac is serving it, so the app is built and installed as its own native app with its own icon and lock screen controls.
 
