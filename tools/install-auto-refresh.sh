@@ -42,5 +42,5 @@ cat > "$plist" <<EOF
 </dict>
 </plist>
 EOF
-launchctl bootstrap "gui/$(id -u)" "$plist"
+launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null || { sleep 1; launchctl bootstrap "gui/$(id -u)" "$plist"; }
 echo "Auto-refresh installed: checks every 30 minutes, log at ~/Library/Logs/prag-music-refresh.log"

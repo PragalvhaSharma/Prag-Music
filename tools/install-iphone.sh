@@ -22,7 +22,7 @@ for d in devices:
         print(d["identifier"], hw["udid"])
         break
 PY
-)
+) || true
 rm -f "$DEVICES_JSON"
 if [ -z "${UDID:-}" ]; then
   echo "No iPhone found. Plug it in, unlock it, and try again." >&2
@@ -41,21 +41,24 @@ xcodebuild -workspace ios/PragMusic.xcworkspace -scheme PragMusic \
 
 xcrun devicectl device install app --device "$CORE_ID" \
   ios/build/dd/Build/Products/Release-iphoneos/PragMusic.app
-
-# Save this build for the auto-refresh job, plus when its signing runs out.
-built=ios/build/dd/Build/Products/Release-iphoneos/PragMusic.app
-keep="$HOME/Library/Application Support/prag-music"
-mkdir -p "$keep"
-[ -d "$keep/PragMusic.app" ] && mv "$keep/PragMusic.app" "$keep/PragMusic.app.old.$$"
-cp -R "$built" "$keep/PragMusic.app"
-find "$keep" -maxdepth 1 -name 'PragMusic.app.old.*' -exec rm -r {} +
-codesign -d --entitlements - --xml "$built" > "$keep/entitlements.plist" 2>/dev/null
-expiry="$(security cms -D -i "$built/embedded.mobileprovision" | plutil -extract ExpirationDate raw -o - -)"
-date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$expiry" +%s > "$keep/iphone-expires"
-
 if [ "${NO_LAUNCH:-0}" = 1 ]; then
   echo "Prag Music is installed on your iPhone."
 else
   xcrun devicectl device process launch --device "$CORE_ID" "$BUNDLE_ID"
   echo "Prag Music is installed and open on your iPhone."
 fi
+
+# Save this build for the auto-refresh job, plus when its signing runs out.
+save_for_refresh() {
+  local built=ios/build/dd/Build/Products/Release-iphoneos/PragMusic.app
+  local keep="$HOME/Library/Application Support/prag-music"
+  local expiry
+  mkdir -p "$keep" &&
+    codesign -d --entitlements - --xml "$built" > "$keep/entitlements.plist" 2>/dev/null &&
+    expiry="$(security cms -D -i "$built/embedded.mobileprovision" | plutil -extract ExpirationDate raw -o - -)" &&
+    { [ ! -d "$keep/PragMusic.app" ] || mv "$keep/PragMusic.app" "$keep/PragMusic.app.old.$$"; } &&
+    cp -R "$built" "$keep/PragMusic.app" &&
+    find "$keep" -maxdepth 1 -name 'PragMusic.app.old.*' -exec rm -r {} + &&
+    date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$expiry" +%s > "$keep/iphone-expires"
+}
+save_for_refresh || echo "Warning: could not save a copy for auto-refresh (the app itself is installed)." >&2
